@@ -16,9 +16,11 @@ const (
 	INTERVAL_END     = "###$$$%%%$$$###"
 	//CMD
 	START_CONNECT = "START_CONNECT"
+	HEART_BEAT    = "HEART_BEAT"
 )
 
 var quitSemaphore chan bool
+var closeCountDown int
 
 //var writeStr chan int
 
@@ -31,9 +33,15 @@ func main() {
 	//	var by []byte
 	//	by, _ = ioutil.ReadAll(response.Body)
 	//	log.Println("result:", manager.GetTextByJson("{\"url\":\"http://www.baidu.com\"}"))
+	connect()
+}
 
+func connect() {
+	closeCountDown = 10
+	//	go monitorHeartBeat()
 	var tcpAddr *net.TCPAddr
 	tcpAddr, _ = net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
+	//	tcpAddr, _ = net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
 
 	conn, _ := net.DialTCP("tcp", nil, tcpAddr)
 	defer conn.Close()
@@ -42,6 +50,7 @@ func main() {
 	sendToServer(conn, START_CONNECT)
 	onMessageRecived(conn)
 }
+
 func onMessageRecived(conn *net.TCPConn) {
 	//	reader := bufio.NewReader(conn)
 	for {
@@ -58,11 +67,21 @@ func onMessageRecived(conn *net.TCPConn) {
 		//		}
 		//		time.Sleep(time.Second)
 		log.Println("before write")
+		if strings.Compare(HEART_BEAT, string(readData)) == 0 {
+			sendToServer(conn, HEART_BEAT)
+			closeCountDown = 10
+			continue
+		}
+
 		readDataList := strings.Split(string(readData), INTERVAL_END)
 		for _, readDataItem := range readDataList {
 			log.Println("开始写入数据")
+			if strings.Compare(HEART_BEAT, string(readData)) == 0 {
+				sendToServer(conn, HEART_BEAT)
+				closeCountDown = 10
+				continue
+			}
 			sendToServer(conn, manager.GetTextByJson(readDataItem))
-
 		}
 		//		sendToServer(conn, manager.GetTextByJson(string(readData)))
 		//		go sendToServer2(conn, string(readData))
@@ -99,6 +118,18 @@ func sendToServer(conn *net.TCPConn, msg string) {
 	}
 	//	time.Sleep(time.Second)
 }
+
+//func monitorHeartBeat() {
+//	for {
+//		time.Sleep(time.Second)
+//		closeCountDown--
+//		if closeCountDown <= 0 {
+//			//break to do reconnect
+//			break
+//		}
+//	}
+//	connect()
+//}
 
 func checkErr(err error) {
 	if err != nil {
