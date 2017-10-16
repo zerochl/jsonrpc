@@ -40,8 +40,8 @@ func connect() {
 	closeCountDown = 10
 	//	go monitorHeartBeat()
 	var tcpAddr *net.TCPAddr
-	tcpAddr, _ = net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
-	//	tcpAddr, _ = net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
+	//	tcpAddr, _ = net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
+	tcpAddr, _ = net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
 
 	conn, _ := net.DialTCP("tcp", nil, tcpAddr)
 	defer conn.Close()
@@ -76,7 +76,7 @@ func onMessageRecived(conn *net.TCPConn) {
 		readDataList := strings.Split(string(readData), INTERVAL_END)
 		for _, readDataItem := range readDataList {
 			log.Println("开始写入数据")
-			if strings.Compare(HEART_BEAT, string(readData)) == 0 {
+			if strings.Compare(HEART_BEAT, string(readDataItem)) == 0 {
 				sendToServer(conn, HEART_BEAT)
 				closeCountDown = 10
 				continue
