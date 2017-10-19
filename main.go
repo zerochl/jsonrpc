@@ -2,22 +2,36 @@ package main
 
 import (
 	"fmt"
-	"io"
+	//	"io"
 	"jsonrpc/manager"
 	"log"
 	"net"
 	"os"
 	"strings"
-	//	"time"
+	"time"
 )
 
 const (
 	SEND_MSG_CODE_OK = 1
 	INTERVAL_END     = "###$$$%%%$$$###"
 	//CMD
-	START_CONNECT = "START_CONNECT"
-	HEART_BEAT    = "HEART_BEAT"
+	START_CONNECT      = "START_CONNECT"
+	HEART_BEAT         = "HEART_BEAT"
+	HEART_TIME         = 20
+	HEART_RECEIVE_TIME = 8
 )
+
+//与browser相关的conn
+type server struct {
+	conn         net.Conn
+	er           chan bool
+	writ         chan bool
+	reconnect    chan bool
+	closeWrite   chan bool
+	closeHandler chan bool
+	recv         chan string
+	send         chan string
+}
 
 var quitSemaphore chan bool
 var closeCountDown int
@@ -25,89 +39,116 @@ var closeCountDown int
 //var writeStr chan int
 
 func main() {
-	//	response, e := http.Get("http://www.baidu.com")
-	//	if e != nil {
-	//		log.Println("http get error:", e)
-	//	}
-	//	defer response.Body.Close()
-	//	var by []byte
-	//	by, _ = ioutil.ReadAll(response.Body)
-	//	log.Println("result:", manager.GetTextByJson("{\"url\":\"http://www.baidu.com\"}"))
-	connect()
+	newConnect()
 }
 
-func connect() {
-	closeCountDown = 10
-	//	go monitorHeartBeat()
-	var tcpAddr *net.TCPAddr
-	//	tcpAddr, _ = net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
-	tcpAddr, _ = net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
-
+func newConnect() {
+connect:
+	tcpAddr, _ := net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
+	//	tcpAddr, _ := net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
 	conn, _ := net.DialTCP("tcp", nil, tcpAddr)
 	defer conn.Close()
-	fmt.Println("connected!")
+	recv := make(chan string)
+	send := make(chan string)
+	er := make(chan bool, 1)
+	writ := make(chan bool)
+	reconnect := make(chan bool)
+	closeWrite := make(chan bool)
+	closeHandler := make(chan bool)
+	server := &server{conn, er, writ, reconnect, closeWrite, closeHandler, recv, send}
 	//告诉服务器，开始建立连接了
 	sendToServer(conn, START_CONNECT)
-	onMessageRecived(conn)
+	go server.newRead()
+	go server.newHandler()
+	go server.newWrite()
+	if <-reconnect {
+		goto connect
+	}
 }
 
-func onMessageRecived(conn *net.TCPConn) {
-	//	reader := bufio.NewReader(conn)
+func (self server) newRead() {
+	//isheart与timeout共同判断是不是自己设定的SetReadDeadline
+	var isheart bool = false
+	//20秒发一次心跳包
+	self.conn.SetReadDeadline(time.Now().Add(time.Second * HEART_TIME))
 	for {
-		log.Println("before read")
-		//		msg, err := reader.ReadString('\n')
-		//		data, _, err := reader.ReadLine()
-		readData := readFromServer(conn)
-		//		_, err := conn.Read(readData)
-		//		fmt.Println(msg)
-		log.Println("end read", string(readData))
-		//		if err != nil {
-		//			quitSemaphore <- true
-		//			break
-		//		}
-		//		time.Sleep(time.Second)
-		log.Println("before write")
-		if strings.Compare(HEART_BEAT, string(readData)) == 0 {
-			sendToServer(conn, HEART_BEAT)
-			closeCountDown = 10
+		data := make([]byte, 0) //此处做一个输入缓冲以免数据过长读取到不完整的数据
+		buf := make([]byte, 128)
+		for {
+			//分段读取
+			n, err := self.conn.Read(buf)
+			if err != nil {
+				if strings.Contains(err.Error(), "timeout") && !isheart {
+					//					log.Println("发送心跳包")
+					sendToServer(self.conn.(*net.TCPConn), HEART_BEAT)
+					//4秒时间收心跳包
+					self.conn.SetReadDeadline(time.Now().Add(time.Second * HEART_RECEIVE_TIME))
+					isheart = true
+					break
+				}
+				self.doReconnect()
+				return
+			}
+			data = append(data, buf[:n]...)
+			//		log.Println("data:" + string(data))
+			if strings.HasSuffix(string(data), INTERVAL_END) {
+				break
+			}
+		}
+		if len(data) == 0 {
 			continue
 		}
-
-		readDataList := strings.Split(string(readData), INTERVAL_END)
+		//		log.Println("收到数据", string(data))
+		readDataList := strings.Split(string(data[0:len(data)-len(INTERVAL_END)]), INTERVAL_END)
 		for _, readDataItem := range readDataList {
-			log.Println("开始写入数据")
+			//			log.Println("读取到一条数据：", string(readDataItem))
 			if strings.Compare(HEART_BEAT, string(readDataItem)) == 0 {
-				sendToServer(conn, HEART_BEAT)
-				closeCountDown = 10
+				//属于心跳
+				log.Println("receive heart")
+				self.conn.SetReadDeadline(time.Now().Add(time.Second * HEART_TIME))
+				isheart = false
 				continue
 			}
-			sendToServer(conn, manager.GetTextByJson(readDataItem))
+			self.recv <- readDataItem
 		}
-		//		sendToServer(conn, manager.GetTextByJson(string(readData)))
-		//		go sendToServer2(conn, string(readData))
 	}
 }
 
-func readFromServer(conn *net.TCPConn) []byte {
-	data := make([]byte, 0) //此处做一个输入缓冲以免数据过长读取到不完整的数据
-	buf := make([]byte, 128)
+func (self server) newWrite() {
 	for {
-		//		log.Println("开始分段读")
-		n, err := conn.Read(buf)
-		if err != nil && err != io.EOF {
-			checkErr(err)
-		}
-		data = append(data, buf[:n]...)
-		//		log.Println("data:" + string(data))
-		if strings.HasSuffix(string(data), INTERVAL_END) {
+		var send string
+
+		select {
+		case send = <-self.send:
+			sendToServer(self.conn.(*net.TCPConn), manager.GetTextByJson(send))
+		case <-self.closeWrite:
+			//fmt.Println("写入server进程关闭")
+			log.Println("close write")
 			break
 		}
+
 	}
-	return data[0 : len(data)-len(INTERVAL_END)]
 }
 
-func sendToServer2(conn *net.TCPConn, readData string) {
-	sendToServer(conn, manager.GetTextByJson(readData))
+func (self server) newHandler() {
+	for {
+		var send string
+		select {
+		case send = <-self.recv:
+			self.send <- manager.GetTextByJson(send)
+		case <-self.closeHandler:
+			//fmt.Println("写入server进程关闭")
+			log.Println("close handler")
+			break
+		}
+
+	}
+}
+
+func (self server) doReconnect() {
+	self.reconnect <- true
+	self.closeWrite <- true
+	self.closeHandler <- true
 }
 
 func sendToServer(conn *net.TCPConn, msg string) {
@@ -118,18 +159,6 @@ func sendToServer(conn *net.TCPConn, msg string) {
 	}
 	//	time.Sleep(time.Second)
 }
-
-//func monitorHeartBeat() {
-//	for {
-//		time.Sleep(time.Second)
-//		closeCountDown--
-//		if closeCountDown <= 0 {
-//			//break to do reconnect
-//			break
-//		}
-//	}
-//	connect()
-//}
 
 func checkErr(err error) {
 	if err != nil {
