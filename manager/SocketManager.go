@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"jsonrpc/parser"
 	"log"
@@ -12,14 +13,16 @@ func GetTextByUrl(url, cookie, userAgent string) string {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println("NewRequest error:", err.Error())
+		return ""
 	}
 
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Cookie", cookie)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println("client.Do error:", err.Error())
+		return ""
 	}
 
 	defer resp.Body.Close()
@@ -30,12 +33,15 @@ func GetTextByUrl(url, cookie, userAgent string) string {
 	return string(textByte)
 }
 
-func GetTextByJson(jsonStr string) string {
+func GetTextByJson(jsonStr string) (string, error) {
 	msg := parser.Parser(jsonStr)
 	msg.HTML_TEXT = GetTextByUrl(msg.URL, msg.COOKIE, msg.USER_AGENT)
+	if msg.HTML_TEXT == "" {
+		return "", errors.New("GetTextByUrl error")
+	}
 	replyJsonStr, err := json.Marshal(msg)
 	if err != nil {
-		return "err" + err.Error()
+		return "", err
 	}
-	return string(replyJsonStr)
+	return string(replyJsonStr), nil
 }

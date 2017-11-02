@@ -17,8 +17,8 @@ const (
 	//CMD
 	START_CONNECT      = "START_CONNECT"
 	HEART_BEAT         = "HEART_BEAT"
-	HEART_TIME         = 20
-	HEART_RECEIVE_TIME = 8
+	HEART_TIME         = 60
+	HEART_RECEIVE_TIME = 15
 )
 
 //与browser相关的conn
@@ -47,7 +47,7 @@ connect:
 	tcpAddr, _ := net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
 	//	tcpAddr, _ := net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
 	conn, _ := net.DialTCP("tcp", nil, tcpAddr)
-	defer conn.Close()
+	//	defer conn.Close()
 	recv := make(chan string)
 	send := make(chan string)
 	er := make(chan bool, 1)
@@ -57,11 +57,12 @@ connect:
 	closeHandler := make(chan bool)
 	server := &server{conn, er, writ, reconnect, closeWrite, closeHandler, recv, send}
 	//告诉服务器，开始建立连接了
-	sendToServer(conn, START_CONNECT)
+	server.sendToServer(conn, START_CONNECT)
 	go server.newRead()
 	go server.newHandler()
 	go server.newWrite()
 	if <-reconnect {
+		conn.Close()
 		goto connect
 	}
 }
@@ -80,7 +81,7 @@ func (self server) newRead() {
 			if err != nil {
 				if strings.Contains(err.Error(), "timeout") && !isheart {
 					//					log.Println("发送心跳包")
-					sendToServer(self.conn.(*net.TCPConn), HEART_BEAT)
+					self.sendToServer(self.conn.(*net.TCPConn), HEART_BEAT)
 					//4秒时间收心跳包
 					self.conn.SetReadDeadline(time.Now().Add(time.Second * HEART_RECEIVE_TIME))
 					isheart = true
@@ -109,6 +110,7 @@ func (self server) newRead() {
 				isheart = false
 				continue
 			}
+			time.Sleep(time.Millisecond * 100)
 			self.recv <- readDataItem
 		}
 	}
@@ -120,7 +122,14 @@ func (self server) newWrite() {
 
 		select {
 		case send = <-self.send:
-			sendToServer(self.conn.(*net.TCPConn), manager.GetTextByJson(send))
+			//			result, err := manager.GetTextByJson(send)
+			//			if err != nil {
+			//				log.Println("GetTextByJson error:", err.Error())
+			//				self.doReconnect()
+			//				return
+			//			}
+			//			log.Println("send:", send)
+			self.sendToServer(self.conn.(*net.TCPConn), send)
 		case <-self.closeWrite:
 			//fmt.Println("写入server进程关闭")
 			log.Println("close write")
@@ -132,10 +141,16 @@ func (self server) newWrite() {
 
 func (self server) newHandler() {
 	for {
-		var send string
+		var recv string
 		select {
-		case send = <-self.recv:
-			self.send <- manager.GetTextByJson(send)
+		case recv = <-self.recv:
+			result, err := manager.GetTextByJson(recv)
+			if err != nil {
+				log.Println("GetTextByJson error:", err.Error())
+				self.doReconnect()
+				return
+			}
+			self.send <- result
 		case <-self.closeHandler:
 			//fmt.Println("写入server进程关闭")
 			log.Println("close handler")
@@ -151,12 +166,15 @@ func (self server) doReconnect() {
 	self.closeHandler <- true
 }
 
-func sendToServer(conn *net.TCPConn, msg string) {
+func (self server) sendToServer(conn *net.TCPConn, msg string) bool {
 	//	log.Println("开始写入数据")
 	_, errW := conn.Write([]byte(msg + INTERVAL_END))
 	if errW != nil {
 		log.Fatalln("往服务端发送数据失败", errW)
+		self.doReconnect()
+		return false
 	}
+	return true
 	//	time.Sleep(time.Second)
 }
 
