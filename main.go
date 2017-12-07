@@ -44,8 +44,8 @@ func main() {
 
 func newConnect() {
 connect:
-	tcpAddr, _ := net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
-	//	tcpAddr, _ := net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
+	//	tcpAddr, _ := net.ResolveTCPAddr("tcp", "104.224.174.229:8082")
+	tcpAddr, _ := net.ResolveTCPAddr("tcp", "192.168.0.253:8085")
 	conn, _ := net.DialTCP("tcp", nil, tcpAddr)
 	//	defer conn.Close()
 	recv := make(chan string)
@@ -62,7 +62,9 @@ connect:
 	go server.newHandler()
 	go server.newWrite()
 	if <-reconnect {
+		log.Println("close ")
 		conn.Close()
+		conn = nil
 		goto connect
 	}
 }
@@ -87,6 +89,7 @@ func (self server) newRead() {
 					isheart = true
 					break
 				}
+				log.Println("can not receive heart")
 				self.doReconnect()
 				return
 			}
